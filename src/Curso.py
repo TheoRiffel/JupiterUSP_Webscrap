@@ -1,11 +1,30 @@
-class Curso():
-    def __init__(self, nome, unidade, duracao_ideal=0, duracao_minima=0, duracao_maxima=0, disciplinas = []):
-        self.nome = nome
-        self.unidade = unidade
-        self.duracao_ideal = duracao_ideal
-        self.duracao_minima = duracao_minima
-        self.duracao_maxima = duracao_maxima   
-        self.disciplinas = disciplinas
+from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Optional
 
-    def __str__(self):
-        return f'Curso: {self.nome}, Unidade: {self.unidade.nome}, Duração Ideal: {self.duracao_ideal}, Duração Mínima: {self.duracao_minima}, Duração Máxima: {self.duracao_maxima}, Disciplinas: {len(self.disciplinas)}'
+from utils import format_none_value
+
+if TYPE_CHECKING:
+    from Disciplina import Disciplina
+    from Unidade import Unidade
+
+
+@dataclass
+class Curso:
+    nome: str
+    unidade: Unidade
+    duracao_ideal: Optional[int] = None
+    duracao_minima: Optional[int] = None
+    duracao_maxima: Optional[int] = None
+    disciplinas: list[Disciplina] = field(default_factory=list)
+
+    def __str__(self) -> str:
+        return (
+            f"Curso:\n"
+            f"  Nome: {self.nome}\n"
+            f"  Unidade: {self.unidade.nome}\n"
+            f"  Duração Ideal: {format_none_value(self.duracao_ideal)}\n"
+            f"  Duração Mínima: {format_none_value(self.duracao_minima)}\n"
+            f"  Duração Máxima: {format_none_value(self.duracao_maxima)}\n"
+            f"  Quantidade de Disciplinas: {len(self.disciplinas)}"
+        )
