@@ -1,23 +1,50 @@
 import sys
-from typing import Optional, List
-from selenium import webdriver
+from typing import NoReturn, Optional, List
 
+from Curso import Curso
+from Disciplina import Disciplina, ModalidadeDisciplina
+from Repository import Repository
 from scrapper import Scrapper
 from Unidade import Unidade
 
 
-def listar_cursos(unidades: List[Unidade]) -> None:
+def exibir_cursos_unidade(unidade: Unidade) -> None:
+    print(f"Unidade: {unidade.nome}")
+    for c in unidade.cursos:
+        print(c.nome)
+
+
+def exibir_todos_cursos(unidades: list[Unidade]) -> None:
     for u in unidades:
         print(f"Unidade: {u.nome}")
         for c in u.cursos:
             print("\n".join([" " * 2 + s for s in str(c).split("\n")]))
 
-def listar_dados_curso(unidades: List[Unidade], curso: str):
-    for u in unidades:
-        print(f"Unidade: {u.nome}")
-        for c in u.cursos:
-            if curso == c.nome:
-                print(curso)
+
+def exibir_disciplina_e_cursos(disciplina: Disciplina, cursos: list[Curso]) -> None:
+    print(disciplina)
+    print(" " * 2 + "Cursos em que a disciplina está presente:")
+    for c in cursos:
+        print(" " * 4 + c.nome)
+
+
+def exibir_multiple_cursos_disciplinas(
+    multiple_cursos_disciplinas: list[tuple[Disciplina, int]],
+) -> None:
+    for d, quantidade in sorted(
+        multiple_cursos_disciplinas, key=lambda cursos_disciplina: cursos_disciplina[1]
+    )[::-1]:
+        print(f"{d.codigo} - {d.nome} | Presente em {quantidade} cursos")
+
+
+def exibir_disciplinas(disciplinas: list[Disciplina]) -> None:
+    for d in disciplinas:
+        print(d)
+
+
+def tear_down(scrapper: Scrapper, status_code=0) -> NoReturn:
+    scrapper.close()
+    exit(status_code)
 
 
 def main() -> None:
@@ -27,24 +54,99 @@ def main() -> None:
 
     unidades = scrapper.scrape_unidades(limit)
 
+    repository = Repository(unidades)
+
     print(
         f"""\nDigite a opção de consulta:
             1) Lista de cursos por unidades
             2) Dados de um determinado curso
-            3) Dados de todos os cursos 
+            3) Dados de todos os cursos
             4) Dados de uma disciplina, inclusive quais cursos ela faz parte
             5) Disciplinas que são usadas em mais de um curso
+            6) Disciplinas com mais de 90 horas de carga horária
+            7) Disciplinas de uma modalidade específica (Obrigatória, Livre ou Eletiva)
         """
     )
 
-    print("\33[2K\r", flush=True, end="")
+    opcao = int(input("Digite a opção: ").strip())
 
-    opcao
+    match opcao:
+        case 1:
+            nome_unidade = input("Digite o nome da unidade: ").strip()
+            unidade = repository.get_unidade_by_name(nome_unidade)
 
-    listar_cursos(unidades)
-    listar_dados_curso(unidades, nome_curso)
+            if not unidade:
+                print("Unidade não encontrada!")
+                tear_down(scrapper, 1)
 
-    scrapper.close()
+            exibir_cursos_unidade(unidade)
+        case 2:
+            nome_curso = input("Digite o nome do curso: ").strip()
+            curso = repository.get_curso_by_name(nome_curso)
+
+            if not curso:
+                print("Curso não encontrado!")
+                tear_down(scrapper, 1)
+
+            print(curso)
+        case 3:
+            exibir_todos_cursos(unidades)
+        case 4:
+            nome_codigo_disciplina = input(
+                "Digite o nome ou código da disciplina: "
+            ).strip()
+            disciplina = repository.get_disciplina_by_name_or_code(
+                nome_codigo_disciplina
+            )
+
+            if not disciplina:
+                print("Disciplina não encontrada!")
+                tear_down(scrapper, 1)
+
+            cursos_disciplina = repository.get_cursos_disciplina(disciplina)
+
+            exibir_disciplina_e_cursos(disciplina, cursos_disciplina)
+        case 5:
+            multiple_cursos_disciplinas = repository.get_multiple_cursos_disciplinas()
+
+            exibir_multiple_cursos_disciplinas(multiple_cursos_disciplinas)
+        case 6:
+            disciplinas = [
+                d for d in repository.get_disciplinas() if (d.carga_horaria or 0) >= 90
+            ]
+
+            exibir_disciplinas(disciplinas)
+        case 7:
+            nome_curso = input("Digite o nome do curso: ").strip()
+            curso = repository.get_curso_by_name(nome_curso)
+
+            if not curso:
+                print("Curso não encontrado!")
+                tear_down(scrapper, 1)
+
+            modalide_str = input(
+                "Digite a modalidade que deseja buscar (Obrigatória, Livre ou Eletiva): "
+            ).strip()
+
+            modalidade = None
+            match modalide_str:
+                case "Obrigatória":
+                    modalide = ModalidadeDisciplina.OBRIGATORIA
+                case "Livre":
+                    modalidade = ModalidadeDisciplina.LIVRE
+                case "Eletiva":
+                    modalidade = ModalidadeDisciplina.ELETIVA
+                case _:
+                    print(
+                        "Modalidade inválida. Escolha entre Obrigatória, Livre ou Eletiva."
+                    )
+                    tear_down(scrapper, 1)
+
+            disciplinas = [d for d in curso.disciplinas if d.modalidade == modalidade]
+
+            exibir_disciplinas(disciplinas)
+
+    tear_down(scrapper)
 
 
 if __name__ == "__main__":
