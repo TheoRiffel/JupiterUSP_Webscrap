@@ -53,7 +53,7 @@ Siga estes passos para configurar e executar o projeto em sua máquina local.
 
 ---
 
-## ▶️ Como Usar
+## Como Usar
 
 Com a configuração concluída, você pode executar a aplicação a partir do diretório raiz do projeto.
 
@@ -73,7 +73,7 @@ Por exemplo, para coletar dados das **3 primeiras unidades**:
 python src/main.py 3
 ```
 
-### 🖥️ Interface de Linha de Comando (CLI) Interativa
+### Interface de Linha de Comando (CLI) Interativa
 
 Após a conclusão do processo de coleta, será apresentado um menu de opções para consultar os dados:
 
