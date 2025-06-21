@@ -1,4 +1,7 @@
+import sys
 from typing import List, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.wait import WebDriverWait
@@ -8,111 +11,133 @@ from Disciplina import Disciplina, ModalidadeDisciplina
 from Curso import Curso
 from scrapper.HomePage import HomePage
 from scrapper.ResultsPage import ResultsPage
-from scrapper.utils import get_int
+from scrapper.utils import get_int, wait_for_optional_element
 
 
 class Scrapper:
-    def __init__(self, options: Optional[Options] = None, timeout: float = 10) -> None:
-        opts = options or self._default_options()
-        self.driver = webdriver.Chrome(opts)
-        self.driver.implicitly_wait(timeout)
-        self.wait = WebDriverWait(self.driver, timeout=timeout)
-        self.home_page = HomePage(self.driver, self.wait)
-        self.results_page = ResultsPage(self.driver, self.wait)
+    def __init__(self, options: Optional[Options] = None, timeout: float = 10, max_workers: int = 10) -> None:
+        self.timeout = timeout
+        self.max_workers = max_workers
+        # Store the base options to create new driver instances in each thread
+        self.base_options = options or self._default_options()
 
-    def close(self) -> None:
-        self.driver.quit()
+    """Worker function to scrape details for a single course."""
+    def _scrape_unico_curso(self, curso: Curso) -> None:
+        """
+        Worker function to scrape details for a single course.
+        Each thread running this function will have its own WebDriver instance.
+        """
+        driver = webdriver.Chrome(options=self.base_options)
+        driver.implicitly_wait(self.timeout)
+        wait = WebDriverWait(driver, timeout=self.timeout)
+        home_page = HomePage(driver, wait)
+        results_page = ResultsPage(driver, wait)
 
+        try:
+            print(f"  [STARTING] Scraping: {curso.unidade.nome} -> {curso.nome}")
+            home_page.open()
+            home_page.select_unidade(curso.unidade.nome)
+            home_page.select_curso(curso.nome)
+            home_page.click_search()
+
+            try:
+                home_page.go_to_grade()
+            except Exception:
+                print(f"\n[ERROR] Não foi possível acessar a grade curricular do curso {curso.nome}.")
+                if wait_for_optional_element(driver, home_page.LOCATOR_CLOSE_ERROR_MODAL, timeout=1.5):
+                    home_page.close_error_modal()
+                return None
+
+            # Screape detalhes do curso
+            ideal, minima, maxima = results_page.read_durations()
+            curso.duracao_ideal, curso.duracao_minima, curso.duracao_maxima = (
+                ideal,
+                minima,
+                maxima,
+            )
+
+            # Scrape disciplinas
+            obrig = results_page.get_table("Disciplinas Obrigatórias")
+            curso.disciplinas = self._parse_disciplina_table(
+                obrig, ModalidadeDisciplina.OBRIGATORIA
+            )
+
+            grade_curricular_text = driver.find_element(*ResultsPage.LOCATOR_GRADE).text
+            if "Disciplinas Optativas Livres" in grade_curricular_text:
+                livres = results_page.get_table("Disciplinas Optativas Livres")
+                curso.disciplinas += self._parse_disciplina_table(
+                    livres, ModalidadeDisciplina.LIVRE
+                )
+
+            if "Disciplinas Optativas Eletivas" in grade_curricular_text:
+                eletivas = results_page.get_table("Disciplinas Optativas Eletivas")
+                curso.disciplinas += self._parse_disciplina_table(
+                    eletivas, ModalidadeDisciplina.ELETIVA
+                )
+            
+            print(f"  [DONE] Processado: {curso.unidade.nome} -> {curso.nome}")
+
+        except Exception as e:
+            print(f"[ERROR] A thread falhou pra esse curso: {curso.nome}: {e}", file=sys.stderr)
+        finally:
+            driver.quit()
+
+    """Scrapa todas as unidades e seus cursos em paralelo.
+    Este método primeiro coleta todas as unidades e seus cursos, depois usa um ThreadPoolExecutor
+    para scrapar os detalhes de cada curso em paralelo."""
     def scrape_unidades(self, limit: Optional[int] = None) -> List[Unidade]:
-        self.home_page.open()
 
-        unidade_names = self.home_page.get_unidades_names()[:limit]
-        unidades = [Unidade(n) for n in unidade_names]
-        total_unidades = len(unidades)
+        # Step 1: Use a temporary driver to get the list of all units and courses.
+        list_driver = webdriver.Chrome(options=self.base_options)
+        list_driver.implicitly_wait(self.timeout)
+        home_page = HomePage(list_driver, WebDriverWait(list_driver, self.timeout))
+        
+        all_cursos_to_scrape: List[Curso] = []
+        unidades: List[Unidade] = []
 
-        for i, u in enumerate(unidades):
-            self._print_status_unidades(i, u, total_unidades)
+        try:
+            home_page.open()
+            unidade_names = home_page.get_unidades_names()[:limit]
+            unidades = [Unidade(n) for n in unidade_names]
+            
+            print(f"Encontrados {len(unidades)} Unidades. Extraindo cursos ...")
+            for unidade in unidades:
+                self._print_status_unidades(unidade) 
+                home_page.select_unidade(unidade.nome)
+                curso_names = home_page.get_cursos()
+                # Create Curso objects; they will be populated by the workers
+                unidade.cursos = [Curso(name, unidade) for name in curso_names]
+                all_cursos_to_scrape.extend(unidade.cursos)
+        finally:
+            list_driver.quit()
+        
+        print(f"\nEncontrado um total de {len(all_cursos_to_scrape)} cursos. Começando o scrapping parelelizado...")
 
-            self.home_page.select_unidade(u.nome)
-            names = self.home_page.get_cursos()
-            u.cursos = [Curso(n, u) for n in names]
-
-            for j, c in enumerate(u.cursos):
-                self._print_status_cursos(j, len(u.cursos), c)
-
-                self.home_page.select_curso(c.nome)
-                self.home_page.click_search()
-
+        # Step 2: Use a ThreadPoolExecutor to scrape course details in parallel.
+        # The worker function modifies the Curso objects in place.
+        with ThreadPoolExecutor(self.max_workers) as executor:
+            futures = [executor.submit(self._scrape_unico_curso, curso) for curso in all_cursos_to_scrape]
+            # Wait for all futures to complete and handle exceptions
+            for future in as_completed(futures):
                 try:
-                    self.home_page.go_to_grade()
-                except:
-                    print("\33[2K\r", flush=True, end="")
-                    print(
-                        f"\n[ERRO] Não foi possível acessar a grade curricular do curso {c.nome}."
-                    )
-                    self.home_page.close_error_modal()
-                    continue
-
-                ideal, minima, maxima = self.results_page.read_durations()
-                c.duracao_ideal, c.duracao_minima, c.duracao_maxima = (
-                    ideal,
-                    minima,
-                    maxima,
-                )
-
-                obrig = self.results_page.get_table("Disciplinas Obrigatórias")
-                c.disciplinas = self._parse_disciplina_table(
-                    obrig, ModalidadeDisciplina.OBRIGATORIA
-                )
-
-                grade_curricular_text = self.driver.find_element(
-                    *ResultsPage.LOCATOR_GRADE
-                ).text
-                if "Disciplinas Optativas Livres" in grade_curricular_text:
-                    livres = self.results_page.get_table("Disciplinas Optativas Livres")
-                    c.disciplinas += self._parse_disciplina_table(
-                        livres, ModalidadeDisciplina.LIVRE
-                    )
-
-                if "Disciplinas Optativas Eletivas" in grade_curricular_text:
-                    eletivas = self.results_page.get_table(
-                        "Disciplinas Optativas Eletivas"
-                    )
-                    c.disciplinas += self._parse_disciplina_table(
-                        eletivas, ModalidadeDisciplina.ELETIVA
-                    )
-
-                self.results_page.back_to_search()
+                    future.result()  # result() will re-raise any exception caught in the worker
+                except Exception as e:
+                    print(f"[ERROR] Uma tarefa da thread falhou: {e}", file=sys.stderr)
 
         self._print_successful_parsing(len(unidades))
-
         return unidades
 
     def _print_status_unidades(
-        self, index: int, current_unidade: Unidade, total_unidades: int
+        self, current_unidade: Unidade
     ) -> None:
-        print("\33[2K\r", flush=True, end="")
-        print(f"[Unidade {index+1}/{total_unidades}] {current_unidade.nome}")
-
-    def _print_status_cursos(
-        self,
-        index: int,
-        current_unidade_total_courses: int,
-        current_course: Curso,
-    ) -> None:
-        print("\33[2K\r", flush=True, end="")
-        print(
-            f"  [Curso {index+1}/{current_unidade_total_courses}] {current_course.nome}",
-            end="",
-            flush=True,
-        )
+        # The old progress bar with '\r' doesn't work with multithreading.
+        # A simple print is better.
+        print(f"[INFO] Fetching cursos da unidade: {current_unidade.nome}")
 
     def _print_successful_parsing(self, total_units: int) -> None:
-        print("\33[2K\r", flush=True, end="")
-
-        print("\n################")
+        print("\n" + "#"*16)
         print(f"Parseamento concluído. {total_units} unidade(s) processada(s).")
-        print("################\n")
+        print("#"*16 + "\n")
 
     def _parse_disciplina_table(
         self, table, modalidade: ModalidadeDisciplina
@@ -122,6 +147,7 @@ class Scrapper:
         )
         parsed: List[Disciplina] = []
         for row in rows:
+            # This logic remains the same as it's efficient enough.
             codigo = row.find_element("xpath", ".//td[1]").text
             nome = row.find_element("xpath", ".//td[2]").text
             creditos_aula = get_int(
@@ -154,7 +180,7 @@ class Scrapper:
                 )
             )
         return parsed
-
+    
     def _default_options(self) -> Options:
         opts = webdriver.ChromeOptions()
         opts.add_argument("--headless=new")
@@ -168,3 +194,7 @@ class Scrapper:
             "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.159 Safari/537.36"
         )
         return opts
+    
+    def close(self) -> None:
+        self.base_options = None
+        return None

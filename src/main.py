@@ -7,6 +7,7 @@ from Repository import Repository
 from scrapper import Scrapper
 from Unidade import Unidade
 
+MAX_WORKERS_DEFAULT = 10
 
 def exibir_cursos_unidade(unidade: Unidade) -> None:
     print(f"Unidade: {unidade.nome}")
@@ -48,9 +49,20 @@ def tear_down(scrapper: Scrapper, status_code=0) -> NoReturn:
 
 
 def main() -> None:
-    limit: Optional[int] = int(sys.argv[1]) if len(sys.argv) > 1 else None
+    limit: Optional[int] = None
+    
+    try:
+        limit = int(sys.argv[1]) if len(sys.argv) > 1 else None
+    except ValueError:
+        print("Argumento inválido. Deve ser um número inteiro.")
+        exit(1) 
 
-    scrapper = Scrapper(timeout=8)
+    max_workers = int(input("Digite o número máximo de threads (default 10): ").strip() or MAX_WORKERS_DEFAULT)
+    if max_workers <= 0:
+        print("Número de threads deve ser maior que zero. Utilizando o valor padrão de 10.")
+        max_workers = MAX_WORKERS_DEFAULT
+  
+    scrapper = Scrapper(timeout=8, max_workers=max_workers)
 
     unidades = scrapper.scrape_unidades(limit)
 
@@ -131,7 +143,7 @@ def main() -> None:
             modalidade = None
             match modalide_str:
                 case "Obrigatória":
-                    modalide = ModalidadeDisciplina.OBRIGATORIA
+                    modalidade = ModalidadeDisciplina.OBRIGATORIA
                 case "Livre":
                     modalidade = ModalidadeDisciplina.LIVRE
                 case "Eletiva":
