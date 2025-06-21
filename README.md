@@ -27,7 +27,7 @@ Siga estes passos para configurar e executar o projeto em sua máquina local.
 
 1.  **Clonar o Repositório**
     ```bash
-    git clone [https://github.com/theoriffel/JupiterUSP_Webscrap.git](https://github.com/theoriffel/JupiterUSP_Webscrap.git)
+    git clone https://github.com/theoriffel/JupiterUSP_Webscrap.git
     cd JupiterUSP_Webscrap
     ```
 
